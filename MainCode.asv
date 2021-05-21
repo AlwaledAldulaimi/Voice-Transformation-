@@ -1,0 +1,823 @@
+clc
+clear all
+close all
+
+fs1 = 16000;
+wdtw2 = 50;   %DTW width for outer DTW (dtw2)
+wdtw1 = 30;   % DTW width for inner DTW (dtw)
+% alpha = 1; lamda = 0.5;
+winlen = 200;  % window length 
+overlap = 100;%winlen/2; % overlapping between two windows 
+
+Infolder_female = dir(f_female); % loading path of the folder (f_female) that have all your female sounds
+MyListOfFiles_F = {Infolder_female(~[Infolder_female.isdir]).name};
+[n_f,m_f] = size(MyListOfFiles_F);
+
+Infolder_male = dir(f_male); % loading path of the folder (f_male) that have all your male sounds
+
+MyListOfFiles_M = {Infolder_male(~[Infolder_male.isdir]).name};
+[n_m,m_m] = size(MyListOfFiles_M);
+
+new_i = 440;
+
+for i = 1 : Num    % Num = how many sentances you want to find features and warping paths
+%% Now Read Source and Target sounds %%
+    filename_f = MyListOfFiles_F{i};
+    f1_f = fullfile(Infolder_female(i).folder,filename_f);
+    d11 = [];sr1 = 0;
+    [d11,sr1] = audioread(f1_f);
+   
+    filename_m = MyListOfFiles_M{i};
+    f1_m = fullfile(Infolder_male(i).folder,filename_m);
+    d22 = [];sr2 = 0;
+    [d22,sr2] = audioread(f1_m);
+d1=[];d2=[];
+d1 = d11(:,1);
+d2 = d22(:,1);
+
+d1(d1 ==0)=[];
+d2(d2 ==0)=[];
+% Resampling
+fname_data_target = [];
+fname_data_target = d1;
+fname_data_target = Resample_data(fname_data_target,fs1,sr1);
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Clipping step %
+fname_data_target1 = [];
+fname_data_target1 = clipped_right_inf(fname_data_target,winlen,overlap);
+% zero mean Step %
+d11=[];
+d11 = diff(Normalize_data(fname_data_target1));
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% d1 = diff(fname_data_target11);
+fname_data_target = [];
+fname_data_target = d2;
+fname_data_target = Resample_data(fname_data_target,fs1,sr2);
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Clipping step %
+fname_data_target1 = [];
+fname_data_target1 = clipped_right_inf(fname_data_target,winlen,overlap);
+% zero mean Step %
+d22=[];
+d22 = diff(Normalize_data(fname_data_target1));
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+d11(d11 ==0)=[];
+d22(d22 ==0)=[];
+d_11_16k = [];d_22_16k=[];
+d_11_16k = d11;
+d_22_16k = d22;
+
+%% Spectrogram iniformation 
+
+winlen1 = 512; 
+overlap1 = 400;%winlen/2;
+nfft = 512;
+
+[num_chuncks_female,sig_female,energy_female] = numchunks1(d_11_16k,winlen1,overlap1);
+[num_chuncks_male,sig_male,energy_male] = numchunks1(d_22_16k,winlen1,overlap1);
+
+anal_win = hamming(winlen1, 'periodic');
+anal_win1 = kaiser(winlen1, 8);
+
+hop =winlen1 - overlap1;
+D1_16k=[];D2_16k=[];D11_16k=[];D22_16k=[];
+% Female
+D11_16k = stft_modified(d_11_16k, anal_win, hop, nfft);
+D11_16kk = stft_modified(d_11_16k, anal_win1, hop, nfft);
+% Male
+D22_16k = stft_modified(d_22_16k, anal_win, hop, nfft);
+D22_16kk = stft_modified(d_22_16k, anal_win1, hop, nfft);
+
+%% Spectral Normalization
+nD2=0;mD2=0;nD1=0;mD1=0;
+[nD2,mD2]= size(D22_16k);
+[nD1,mD1]= size(D11_16k);
+D22_16k_N = [];D11_16k_N=[];i1=0;i2=0;
+for  i1 = 1 : mD2
+    waled = 0;
+    waled = sqrt(sum((abs(D22_16k(:,i1))).^2));
+    D22_16k_N(:,i1) = abs(D22_16k(:,i1))/waled;
+    D22_16k_phase(:,i1) = abs(D22_16k(:,i1));
+end    
+for  i2 = 1 : mD1
+    waled = 0;
+    waled = sqrt(sum((abs(D11_16k(:,i2))).^2));
+    D11_16k_N(:,i2) = abs(D11_16k(:,i2))/waled;
+    D11_16k_phase(:,i1) = abs(D11_16k(:,i1));
+end
+
+nD2=0;mD2=0;nD1=0;mD1=0;
+[nD2,mD2]= size(D22_16kk);
+[nD1,mD1]= size(D11_16kk);
+D22_16kk_N = [];D11_16kk_N=[];i1=0;i2=0;
+for  i1 = 1 : mD2
+    waled = 0;
+    waled = sqrt(sum((abs(D22_16kk(:,i1))).^2));
+    D22_16kk_N(:,i1) = abs(D22_16kk(:,i1))/waled;
+%     D22_16k_phase(:,i1) = abs(D22_16k(:,i1));
+end    
+for  i2 = 1 : mD1
+    waled = 0;
+    waled = sqrt(sum((abs(D11_16kk(:,i2))).^2));
+    D11_16kk_N(:,i2) = abs(D11_16kk(:,i2))/waled;
+%     D11_16k_phase(:,i1) = abs(D11_16k(:,i1));
+end
+
+%% DTW
+% find DTW between male and female signals 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+a_spec_first=[];b_spec_first=[];aa1_16k =[];bb1_16k =[];
+[a_spec_first,b_spec_first,aa1_16k,bb1_16k]=dtw_two_Normalized_new_12262019(D22_16k_N,D11_16k_N,wdtw2,wdtw1,...
+    alpha,lamda,hop,energy_female,energy_male);     
+
+p=[];q=[];
+p = a_spec_first; q = b_spec_first;
+
+% DTW
+D22x_16k_N_direct_1 = []; D22x_16k_N_direct_1(:,p(:)) = D22_16k(:,q(:));
+
+% DFW %
+for ik = 1: length(D2i1_16k)
+a1a_16k =[]; b1b_16k=[];
+a1a_16k = aa1_16k{D2i2_16k(ik),D2i1_16k(ik)};
+b1b_16k = bb1_16k{D2i2_16k(ik),D2i1_16k(ik)};
+D2iL1_16k = zeros(1, size(D11_16k(:,ik),1));
+for iik = 1:length(D2iL1_16k)
+    D2iL1_16k(iik) = b1b_16k(min(find(a1a_16k >= iik)));
+end
+D2iL1_index_warping_cell_16k{i,ik} = D2iL1_16k;
+a1_total_16k_N{1,ik} = a1a_16k;
+b1_total_16k_N{1,ik} = b1b_16k;
+D22X_16k_N(:,ik) = D22x_16k_N(D2iL1_16k(:),ik);
+end
+
+% Save thew temproal Spectral aligned featuers 
+D2x_TimeAlign_cell_16k{1,i} = D22x_16k_N_direct_1;
+D2x_TimeAlign_cell_abs_16k{1,i} = abs(D22x_16k_N_direct_1);
+
+% Find the warping paths for the frequency warping
+p=[];q=[];
+p = a_spec_first; q = b_spec_first;
+for ik = 1: length(p)
+a1a_16k_test =[]; b1b_16k_test=[];
+a1a_16k_test = aa1_16k{p(ik),q(ik)};
+b1b_16k_test = bb1_16k{p(ik),q(ik)};
+a1_total_16k_N_waled{i,p(ik)}= a1a_16k_test;
+b1_total_16k_N_waled{i,p(ik)}= b1b_16k_test;
+end
+% Doing spectral warping 
+[size_row,size_colu] = size(D22x_16k_N_direct_1);
+for iji = 1 : size_colu
+    a1a_16k_test = [];a1a_16k_test = a1_total_16k_N_waled{i,iji};
+    b1b_16k_test = [];b1b_16k_test = b1_total_16k_N_waled{i,iji};
+    D22X_16k_N_b1b_1(a1a_16k_test(:),iji) = D22x_16k_N_direct_1(b1b_16k_test(:),iji);
+end
+
+% % % % % % [size_row,size_colu] = size(D22X_16k_N_b1b_1_Phase);
+% % % % % % 
+% % % % % % for iji = 1 : size_colu
+% % % % % %     D22X_16k_N_b1b_1_Phase_1(:,iji) = D22X_16k_N_b1b_1_Phase(:,iji) .* exp(1i*STFT_phase_1_f(:,iji));
+% % % % % %     D22X_16k_N_b1b_1_Phase_2(:,iji) = D22X_16k_N_b1b_1_Phase(:,iji) .* exp(1i*STFT_phase_2_f(:,iji));
+% % % % % %     D22X_16k_N_b1b_1_Phase_3(:,iji) = D22X_16k_N_b1b_1_Phase(:,iji) .* exp(1i*phase_1(:,iji));
+% % % % % %     
+% % % % % % end
+
+% % % [N,L]=size(D22X_16k_N_b1b_1);
+% % % D22X_16k_N_b1b_1_phase_female =D22X_16k_N_b1b_1;
+% % % D22X_16k_N_b1b_1_phase_female(:,2:floor(L/2))=D22X_16k_N_b1b_1_phase_female(:,2:floor(L/2)).*exp(1i*angle_phase_2_female);
+% % % D22X_16k_N_b1b_1_phase_female(:,floor(L/2)+1:L-2)=D22X_16k_N_b1b_1_phase_female(:,floor(L/2)+1:L-2).*exp(-1i*flip(angle_phase_2_female,2));
+% % % 
+% % % D22X_16k_N_b1b_1_phase_male =D22X_16k_N_b1b_1;
+% % % D22X_16k_N_b1b_1_phase_male(:,2:floor(L/2))=D22X_16k_N_b1b_1_phase_male(:,2:floor(L/2)).*exp(1i*angle_phase_20_male);
+% % % D22X_16k_N_b1b_1_phase_male(:,floor(L/2)+1:L-2)=D22X_16k_N_b1b_1_phase_male(:,floor(L/2)+1:L-2).*exp(-1i*flip(angle_phase_20_male,2));
+
+% [size_row_sig,size_colu_sig] = size(D22x_16k_N_direct_1_phase);
+% 
+% for iji = 1 : size_colu_sig
+%     a1a_16k_test_sig = [];a1a_16k_test_sig = a1_total_16k_N_waled_sig{i,iji};
+%     b1b_16k_test_sig = [];b1b_16k_test_sig = b1_total_16k_N_waled_sig{i,iji};
+%     D22X_16k_N_b1b_1_Phase(a1a_16k_test_sig(:),iji) = D22x_16k_N_direct_1_phase(b1b_16k_test_sig(:),iji);
+% end
+
+
+% new_i = i;
+%% save mat file 
+% % % % % % if new_i == i
+% % % % % %     
+% % % % % %     save_idx_inf0(i,D2x_TimeAlign_cell_16k,D2x_TimeAlign_cell_abs_16k...
+% % % % % %         ,a1_total_16k_N,a1_total_16k_N_waled,mydir,b1_total_16k_N,b1_total_16k_N_waled)
+% % % % % %     
+% % % % % % %         file_name1 = strcat(mydir,'/result/maleInfo_Alig_1_',num2str(i),'_16k1.mat');
+% % % % % % %         save(file_name1,'D2x_TimeAlign_cell_16k');
+% % % % % % %         
+% % % % % % %         file_name1 = strcat(mydir,'/result/D2x_TimeAlign_cell_abs_1_',num2str(i),'_16k1.mat');
+% % % % % % %         save(file_name1,'D2x_TimeAlign_cell_abs_16k');
+% % % % % % %         
+% % % % % % %         
+% % % % % % %         file_name1 = strcat(mydir,'/result/a1_total_1_',num2str(i),'_16k_N1.mat');
+% % % % % % %         save(file_name1,'a1_total_16k_N');
+% % % % % % %         file_name1 = strcat(mydir,'/result/a1_total_1_',num2str(i),'_16k_N_waled1.mat');
+% % % % % % %         save(file_name1,'a1_total_16k_N_waled');
+% % % % % % %         
+% % % % % % %         file_name1 = strcat(mydir,'/result/b1_total_1_',num2str(i),'_16k_N1.mat');
+% % % % % % %         save(file_name1,'b1_total_16k_N');
+% % % % % % %         file_name1 = strcat(mydir,'/result/b1_total_1_',num2str(i),'_16k_N_waled1.mat');
+% % % % % % %         save(file_name1,'b1_total_16k_N_waled');
+% % % % % % toc
+% % % % % % Send_Email(i,machine_type)
+% % % % % % new_i = new_i + 20;
+% % % % % % disp('here');
+% % % % % % end
+%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % % % load('/home/alwaled/Desktop/HP_NN/NewResultNN/a_total_1_16k.mat');
+% % % % load('/home/alwaled/Desktop/HP_NN/NewResultNN/b_total_1_16k.mat');
+% % % % load('/home/alwaled/Desktop/HP_NN/NewResultNN/maleInfo_Alig_1_16k.mat');
+% % % % % % step_index = max(max(cellfun('length',a1_total_16k_N)))
+% % % % % % for idx_sound = 1 : length(D22x_16k_N_direct_1)
+% % % % % %     a = [];b=[];D=[];
+% % % % % %     a = a1_total_16k_N{1,idx_sound};
+% % % % % %     b = b1_total_16k_N{1,idx_sound};
+% % % % % %     D = D22x_16k_N_direct_1(:,idx_sound);
+% % % % % % % % %     % Direct Warping
+% % % % % % % % %     i=0;
+% % % % % % % % %     for i =1:length(a)
+% % % % % % % % %         D_w2(a(i)) =D(b(i));
+% % % % % % % % %     end
+% % % % % %     %  Paper method to find index
+% % % % % %     i=0;n_telda11=[];n_telda_a1 =[];n_telda_b1=[];
+% % % % % %     for i = 2 : step_index
+% % % % % %         n_telda11 = [n_telda11 (i)*(length(a)/step_index)];
+% % % % % %     end
+% % % % % %     n_telda_a1 = [a(1) n_telda11];
+% % % % % %     i=0;n_telda11=[];
+% % % % % %     for i = 2 : step_index
+% % % % % %         n_telda11 = [n_telda11 (i)*(length(b)/step_index)];
+% % % % % %     end
+% % % % % %     n_telda_b1 = [b(1) n_telda11];
+% % % % % %     % In terpolation for the indices
+% % % % % %     a_telda=[];a_telda1=[];b_telda=[];b_telda1=[];
+% % % % % %     a_telda = interp1((1:length(a)),a,linspace(1,length(a),step_index),'linear');
+% % % % % %     b_telda = interp1((1:length(b)),b,linspace(1,length(b),step_index),'linear');
+% % % % % %     
+% % % % % %     a_telda1 = interp1((1:length(a)),a,n_telda_a1,'linear');  % Paper method
+% % % % % %     b_telda1 = interp1((1:length(a)),b,n_telda_b1,'linear');  % Paper method
+% % % % % %     % Make uniqness 
+% % % % % %     a_un = [];b_un = [];a_un1 = [];b_un1 = [];IA_a=[];idx_a=[];IA_a1=[];idx_a1=[];
+% % % % % %     IA_b=[];idx_b=[];IA_b1=[];idx_b1=[];
+% % % % % %     [a_un,IA_a,idx_a] = unique(a_telda,'stable');
+% % % % % %     [b_un,IA_b,idx_b] = unique(b_telda,'stable');
+% % % % % %     [a_un1,IA_a1,idx_a1] = unique(a_telda1,'stable');
+% % % % % %     [b_un1,IA_b1,idx_b1] = unique(b_telda1,'stable');
+% % % % % %     
+% % % % % %     D_telda_un = interp1( [1:1:length(D)] , D , b_un , 'linear');  % Interpolation with unique indices
+% % % % % %     D_telda = D_telda_un(idx_b);                % Re uniqueness
+% % % % % %     D_telda_un1 = interp1( [1:1:length(D)] , D , b_un1 , 'linear');  % Interpolation with unique indices
+% % % % % %     D_telda1 = D_telda_un1(idx_b1);                % Re uniqueness
+% % % % % %     
+% % % % % %     for i = 1 : length(D_telda)
+% % % % % %         D_telda_warped(idx_a(i)) = D_telda(i); % D_telda_warped1(idx_a) = D_telda_un(idx_b);
+% % % % % %     end
+% % % % % %     for i = 1 : length(D_telda1)
+% % % % % %         D_telda_warped1(idx_a1(i)) = D_telda1(i); % D_telda_warped1(idx_a) = D_telda_un(idx_b);
+% % % % % %     end
+% % % % % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % % % % %     % Paper method to find index
+% % % % % %     i=0;n_telda11=[];n_telda_a1=[];
+% % % % % %     for i = 2 : length(D)
+% % % % % %         n_telda11 = [n_telda11 (i)*(length(D_telda_warped1)/length(D))];
+% % % % % %     end
+% % % % % %     n_telda_a1 = [a(1) n_telda11];
+% % % % % % 
+% % % % % % % % % % %     i=0;n_telda11=[];n_telda_b1=[];
+% % % % % % % % % % %     for i = 2 : length(D)
+% % % % % % % % % % %         n_telda11 = [n_telda11 (i)*(length(D_telda_warped1)/length(D))];
+% % % % % % % % % % %     end
+% % % % % % % % % % %     n_telda_b1 = [b(1) n_telda11];
+% % % % % %     %%%______________%%%
+% % % % % %     i=0;n_telda11=[];n_telda_a11=[];
+% % % % % %     for i = 2 : length(D)
+% % % % % %         n_telda11 = [n_telda11 (i)*(length(D_telda_warped)/length(D))];
+% % % % % %     end
+% % % % % %     n_telda_a11 = [a(1) n_telda11];
+% % % % % % 
+% % % % % % % % % % %     i=0;n_telda11=[];n_telda_b11=[];
+% % % % % % % % % % %     for i = 2 : length(D)
+% % % % % % % % % % %         n_telda11 = [n_telda11 (i)*(length(D_telda_warped)/length(D))];
+% % % % % % % % % % %     end
+% % % % % % % % % % %     n_telda_b11 = [b(1) n_telda11];
+% % % % % % 
+% % % % % % % a_telda_rev = interp1((1:length(a_telda)),a_telda,linspace(1,length(a_telda), length(D)),'spline');
+% % % % % % % b_telda_rev = interp1((1:length(b_telda)),b_telda,linspace(1,length(b_telda), length(D)),'spline');
+% % % % % % % 
+% % % % % % % a_telda_rev1 = interp1((1:length(a_telda1)),a_telda1,n_telda1,'spline');
+% % % % % % % b_telda_rev1 = interp1((1:length(b_telda1)),b_telda1,n_telda1,'spline');
+% % % % % % 
+% % % % % %     D_warped1(:,idx_sound) = interp1([1:length(D_telda_warped1)],D_telda_warped1,n_telda_a1,'linear');  % paper method
+% % % % % %     D_warped2(:,idx_sound) = interp1([1:length(D_telda_warped1)],D_telda_warped1,n_telda_a1,'spline');  % paper method
+% % % % % % 
+% % % % % %     D_warped11(:,idx_sound) = interp1([1:length(D_telda_warped1)],D_telda_warped1,linspace(1,length(D_telda_warped1), length(D)),'linear');
+% % % % % %     D_warped22(:,idx_sound) = interp1([1:length(D_telda_warped1)],D_telda_warped1,linspace(1,length(D_telda_warped1), length(D)),'spline');
+% % % % % % 
+% % % % % %     D_warped3(:,idx_sound) = interp1([1:length(D_telda_warped)],D_telda_warped,n_telda_a11,'linear'); % paper method
+% % % % % %     D_warped4(:,idx_sound) = interp1([1:length(D_telda_warped)],D_telda_warped,n_telda_a11,'spline'); % paper method
+% % % % % % 
+% % % % % %     D_warped33(:,idx_sound) = interp1([1:length(D_telda_warped)],D_telda_warped,linspace(1,length(D_telda_warped),length(D)),'linear');
+% % % % % %     D_warped44(:,idx_sound) = interp1([1:length(D_telda_warped)],D_telda_warped,linspace(1,length(D_telda_warped),length(D)),'spline');
+% % % % % % 
+% % % % % %     D_warped1_1(:,idx_sound) = interp1([1:length(D_telda_warped1)],D_telda_warped1,round(n_telda_a1),'linear');  % paper method
+% % % % % %     D_warped2_2(:,idx_sound) = interp1([1:length(D_telda_warped1)],D_telda_warped1,round(n_telda_a1),'spline');  % paper method
+% % % % % % 
+% % % % % %     D_warped11_1(:,idx_sound) = interp1([1:length(D_telda_warped1)],D_telda_warped1,round(linspace(1,length(D_telda_warped1), length(D))),'linear');
+% % % % % %     D_warped22_2(:,idx_sound) = interp1([1:length(D_telda_warped1)],D_telda_warped1,round(linspace(1,length(D_telda_warped1), length(D))),'spline');
+% % % % % % 
+% % % % % %     D_warped3_3(:,idx_sound) = interp1([1:length(D_telda_warped)],D_telda_warped,round(n_telda_a11),'linear'); % paper method
+% % % % % %     D_warped4_4(:,idx_sound) = interp1([1:length(D_telda_warped)],D_telda_warped,round(n_telda_a11),'spline'); % paper method
+% % % % % % 
+% % % % % %     D_warped33_3(:,idx_sound) = interp1([1:length(D_telda_warped)],D_telda_warped,round(linspace(1,length(D_telda_warped),length(D))),'linear');
+% % % % % %     D_warped44_4(:,idx_sound) = interp1([1:length(D_telda_warped)],D_telda_warped,round(linspace(1,length(D_telda_warped),length(D))),'spline');
+% % % % % % % % % % % %     figure(1)
+% % % % % % % % % % % %     subplot(2,2,1);plot(abs(D_warped1));hold on; plot(abs(D_warped11));plot(abs(D_w2));legend('D 1 Lin P','D 11 Lin L','Warped D');grid
+% % % % % % % % % % % %     subplot(2,2,2);plot(abs(D_warped2));hold on; plot(abs(D_warped22));plot(abs(D_w2));legend('D 2 NonL P','D 22 NonL L','Warped D');grid
+% % % % % % % % % % % %     subplot(2,2,3);plot(abs(D_warped3));hold on; plot(abs(D_warped33));plot(abs(D_w2));legend('D 3 Lin P','D 33 Lin L','Warped D');grid
+% % % % % % % % % % % %     subplot(2,2,4);plot(abs(D_warped4));hold on; plot(abs(D_warped44));plot(abs(D_w2));legend('D 4 NonL P','D 44 NonL L','Warped D');grid
+% % % % % %     
+% % % % % % end
+% % % % % % % % % % % % Direct Warping
+% % % % % % % % % % % for iji = 1 : length(D22x_16k_N_direct_1)
+% % % % % % % % % % %     a1a_16k_test = [];a1a_16k_test = a1_total_16k_N{1,iji};
+% % % % % % % % % % %     b1b_16k_test = [];b1b_16k_test = b1_total_16k_N{1,iji};
+% % % % % % % % % % %     D22X_16k_N_b1b_1(a1a_16k_test(:),iji) = D22x_16k_N_direct_1(b1b_16k_test(:),iji);
+% % % % % % % % % % % end
+% % % % % % % Create Sound
+synth_win = anal_win;
+d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+[x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_1, anal_win, synth_win, hop, nfft, fs1);
+d22xx_original = resize(x_istft1', length(d_11_16k),1);
+y_16k = bandpass(d22xx_original,[500 7500],fs1);
+
+% synth_win = anal_win;
+parameter.synHop = hop; parameter.win = synth_win;parameter.zeroPad=0;parameter.origSigLen=length(d_11_16k);
+parameter.numOfIter = 10000;parameter.restoreEnergy=1;parameter.fftShift=1;
+d_11_normal_phase=[];x1_istft1=[];
+y_16k_modified_1 = istft_modified(D22X_16k_N_b1b_1,parameter,nfft);
+
+parameter.synHop = hop; parameter.win = synth_win;parameter.zeroPad=0;parameter.origSigLen=length(d_11_16k);
+parameter.numOfIter = 10000;parameter.restoreEnergy=1;parameter.fftShift=0;
+d_11_normal_phase=[];x1_istft1=[];
+y_16k_modified_2 = istft_modified(D22X_16k_N_b1b_1,parameter,nfft);
+% junk_test_matrix = D22X_16k_N_b1b_1;
+% junk_test_matrix(:,1) = junk_test_matrix(:,9);
+% junk_test_matrix(:,2) = junk_test_matrix(:,9);
+% junk_test_matrix(:,3) = junk_test_matrix(:,9);
+% junk_test_matrix(:,4) = junk_test_matrix(:,9);
+% junk_test_matrix(:,5) = junk_test_matrix(:,9);
+% junk_test_matrix(:,6) = junk_test_matrix(:,9);
+% junk_test_matrix(:,7) = junk_test_matrix(:,9);
+% junk_test_matrix(:,8) = junk_test_matrix(:,9);
+
+filename0 = strcat('/home/alwaled/Desktop/New_Phrases/phrase',num2str(i),'_0.mat')
+filename1 = strcat('/home/alwaled/Desktop/New_Phrases/phrase',num2str(i),'_1.mat')
+filename2 = strcat('/home/alwaled/Desktop/New_Phrases/phrase',num2str(i),'_2.mat')
+
+save(filename2,'y_16k_modified_2');
+save(filename1,'y_16k_modified_1');
+save(filename0,'y_16k');
+
+% synth_win = anal_win;
+% d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% [x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N, anal_win, synth_win, hop, nfft, fs1);
+% d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% y_16k_phase_1 = bandpass(d22xx_original,[500 7500],fs1);
+% 
+% parameter.synHop = hop; parameter.win = synth_win;parameter.zeroPad=0;parameter.origSigLen=length(d_11_16k);
+% parameter.numOfIter = 10000;parameter.restoreEnergy=1;parameter.fftShift=1;
+% d_11_normal_phase=[];x1_istft1=[];
+% y_16k_modified_3 = istft_modified(D22X_16k_N,parameter,nfft);
+% 
+% parameter.synHop = hop; parameter.win = synth_win;parameter.zeroPad=0;parameter.origSigLen=length(d_11_16k);
+% parameter.numOfIter = 10000;parameter.restoreEnergy=1;parameter.fftShift=0;
+% d_11_normal_phase=[];x1_istft1=[];
+% y_16k_modified_4 = istft_modified(D22X_16k_N,parameter,nfft);
+% 
+% 
+% synth_win = anal_win;
+% d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% [x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_1_Phase_1, anal_win, synth_win, hop, nfft, fs1);
+% d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% y_16k_phase_1 = bandpass(d22xx_original,[500 7500],fs1);
+% 
+% synth_win = anal_win;
+% d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% [x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_1_Phase_2, anal_win, synth_win, hop, nfft, fs1);
+% d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% y_16k_phase_2 = bandpass(d22xx_original,[500 7500],fs1);
+% 
+% synth_win = anal_win;
+% d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% [x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_1_Phase_3, anal_win, synth_win, hop, nfft, fs1);
+% d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% y_16k_phase_3 = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % %%%___________%%%
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D_warped1, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_rD_warped1 = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % 
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D_warped2, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_D_warped2 = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % %  
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D_warped11, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_D_warped11 = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % 
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D_warped22, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_D_warped22 = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % 
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D_warped3, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_D_warped3 = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % 
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D_warped4, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_D_warped4 = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D_warped33, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_D_warped33 = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % 
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D_warped44, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_D_warped44 = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % %%%___________%%%
+% % % % % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % % % % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % % % % % 
+% % % % % % % D22X_16k_N_b1b_1(a1a_16k_test(:)) = D22x_16k_N_direct_1(b1b_16k_test(:),p(ik));
+% % % % % % % D22X_16k_N_b1b_junk1(:,p(ik))= D22X_16k_N_b1b_1;
+% % % % % % 
+% % % % % % % % D22X_16k_N_b1b_1_test(a1a_16k_test(:),p(ik)) = D22x_16k_N_direct_1(b1b_16k_test(:),q(ik));  %  1 equal
+% % % % % % % % D22X_16k_N_b1b_1_test1(a1a_16k_test(:)) = D22x_16k_N_direct_1(b1b_16k_test(:),q(ik));  
+% % % % % % % % D22X_16k_N_b1b_junk1_test(:,p(ik))= D22X_16k_N_b1b_1_test1;   %  1 equal
+% % % % % % % % 
+% % % % % % % % D22X_16k_N_b1b(a1a_16k_test(:)) = D22x_16k_N_direct(b1b_16k_test(:),ik);
+% % % % % % % % D22X_16k_N_b1b_cell(:,ik) = D22X_16k_N_b1b;
+% % % % % % % % D22X_16k_N_b1b_junk(a1a_16k_test(:)) = D22x_16k_N_direct(b1b_16k_test(:),p(ik));
+% % % % % % % % D22X_16k_N_b1b_cell_junk(:,p(ik)) = D22X_16k_N_b1b_junk;
+% % % % % % % % D22X_16k_N_b1b_junk_test(a1a_16k_test(:),p(ik)) = D22x_16k_N_direct(b1b_16k_test(:),q(ik));  % 2 equal
+% % % % % % % % D22X_16k_N_b1b_junk_test_1(a1a_16k_test(:)) = D22x_16k_N_direct(b1b_16k_test(:),q(ik));
+% % % % % % % % D22X_16k_N_b1b_junk_test_1_test(:,p(ik)) = D22X_16k_N_b1b_junk_test_1;   % 2 equal
+% % % % % % % % 
+% % % % % % % % D22X_16k_N_b1b_11(a1a_16k_test(:)) = D22x_16k_N_direct_11(b1b_16k_test(:),p(ik));
+% % % % % % % % D22X_16k_N_b1b_11_junk1(:,p(ik))= D22X_16k_N_b1b_11;
+% % % % % % % % D22X_16k_N_b1b_11_test(a1a_16k_test(:),p(ik)) = D22x_16k_N_direct_11(b1b_16k_test(:),q(ik));  % 3 equal
+% % % % % % % % D22X_16k_N_b1b_11_test1(a1a_16k_test(:)) = D22x_16k_N_direct_11(b1b_16k_test(:),q(ik));
+% % % % % % % % D22X_16k_N_b1b_junk11_test(:,p(ik))= D22X_16k_N_b1b_11_test1;  % 3 equal
+% % % % % % 
+% % % % % % 
+% % % % % % % % D22X_16k_N_b1b_cell_junk1(:,p(:)) = D22X_16k_N_b1b_cell(:,q(:));
+% % % % % % % % D22X_16k_N_b1b_cell_junk11(:,p(:)) = D22X_16k_N_b1b_cell(:,p(:));
+% % % % % % % % 
+% % % % % % % % 
+% % % % % % % %  D22X_16k_N_b1b_cell_junk11; 
+% % % % % % 
+% % % % % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % % % % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % % % % % % load('/home/alwaled/Desktop/HP_NN/NewResultNN/a_total_1_16k.mat');
+% % % % % % % load('/home/alwaled/Desktop/HP_NN/NewResultNN/b_total_1_16k.mat');
+% % % % % % % load('/home/alwaled/Desktop/HP_NN/NewResultNN/maleInfo_Alig_1_16k.mat');
+% % % % % % load('/home/alwaled/Desktop/HP_NN/NewResultNN/final_a, Epoch, 3999.mat');
+% % % % % % a_final_NN = ZZ_full_path1;
+% % % % % % load('/home/alwaled/Desktop/HP_NN/NewResultNN/final_b, Epoch, 3999.mat');
+% % % % % % b_final_NN = ZZ_full_path;
+% % % % % % load('/home/alwaled/Desktop/HP_NN/NewResultNN/a_telda_total_474_16k.mat');
+% % % % % % A11_telda_474 = A11_telda;A11_telda = [];
+% % % % % % load('/home/alwaled/Desktop/HP_NN/NewResultNN/a_telda_total_540_16k.mat');
+% % % % % % A11_telda_540 = A11_telda;A11_telda = [];
+% % % % % % 
+% % % % % % len_a_max = length(a_final_NN);%max(max(cellfun('length',A11)));
+% % % % % % len_b_max = length(b_final_NN);%max(max(cellfun('length',B11)));
+% % % % % % % [n_a,m_a] = size(A11);
+% % % % % % % [n_b,m_b] = size(B11);
+% % % % % % A11_telda_1 = []; A11_telda_rev = [];
+% % % % % % B11_telda_1 = []; B11_telda_rev = [];
+% % % % % % 
+% % % % % % %% Do revse interpolation with rounding, flooring and ceiling for (a and b)_telda coming from NN. 
+% % % % % % % And do warping
+% % % % % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % % % % % for i = 1 : 1%n_a
+% % % % % %     for j = 1 : length(a1_total_16k_N) %1% m_a    457
+% % % % % %         n_a_telda_rev = []; n_b_telda_rev = [];
+% % % % % %         if any(a1_total_16k_N{i,j})
+% % % % % %             for k = 1 : length(a1_total_16k_N{i,j})
+% % % % % %                 n_a_telda_rev = [n_a_telda_rev ((k-1)*(len_a_max-1)/(length(a1_total_16k_N{i,j})-1))];
+% % % % % %                 n_b_telda_rev = [n_b_telda_rev ((k-1)*(len_b_max-1)/(length(b1_total_16k_N{i,j})-1))];
+% % % % % %             end
+% % % % % %             y_a = [];
+% % % % % %             y_a = [0:1:(len_a_max-1)];
+% % % % % %             A11_telda_rev{i,j} = interp1(y_a,a_final_NN(j,:),n_a_telda_rev,'spline');
+% % % % % %             y_b = [];
+% % % % % %             y_b = [0:1:(len_a_max-1)];
+% % % % % %             B11_telda_rev{i,j} = interp1(y_b,b_final_NN(j,:),n_b_telda_rev,'spline');
+% % % % % %             b1b_16k_test=[];b1b_16k_test=B11_telda_rev{i,j};
+% % % % % %             a1a_16k_test=[];a1a_16k_test=A11_telda_rev{i,j};
+% % % % % %             
+% % % % % %             a1a_16k_test_round = []; a1a_16k_test_floor = []; a1a_16k_test_ceil = [];
+% % % % % %             a1a_16k_test_round = round(a1a_16k_test);
+% % % % % %             a1a_16k_test_round(a1a_16k_test_round == 0) = 1;
+% % % % % %             a1a_16k_test_round(a1a_16k_test_round > 257) = 257;
+% % % % % %             if find(a1a_16k_test_round <0)
+% % % % % %                 ind = find(a1a_16k_test_round < 0);
+% % % % % %                 a1a_16k_test_round(ind) = a1a_16k_test_round(ind+1);
+% % % % % %             end
+% % % % % %             
+% % % % % %             a1a_16k_test_floor = floor(a1a_16k_test);
+% % % % % %             a1a_16k_test_floor(a1a_16k_test_floor == 0) = 1;
+% % % % % %             a1a_16k_test_floor(a1a_16k_test_floor > 257) = 257;
+% % % % % %             if find(a1a_16k_test_floor <0)
+% % % % % %                 ind = find(a1a_16k_test_floor < 0);
+% % % % % %                 a1a_16k_test_floor(ind) = a1a_16k_test_floor(ind+1);
+% % % % % %             end
+% % % % % %             
+% % % % % %             a1a_16k_test_ceil = ceil(a1a_16k_test);
+% % % % % %             a1a_16k_test_ceil(a1a_16k_test_ceil == 0) = 1;
+% % % % % %             a1a_16k_test_ceil(a1a_16k_test_ceil > 257) = 257;
+% % % % % %             if find(a1a_16k_test_ceil <0)
+% % % % % %                 ind = find(a1a_16k_test_ceil < 0);
+% % % % % %                 a1a_16k_test_ceil(ind) = a1a_16k_test_ceil(ind+1);
+% % % % % %             end
+% % % % % %             
+% % % % % %             b1b_16k_test_round = []; b1b_16k_test_floor = []; b1b_16k_test_ceil = [];
+% % % % % %             b1b_16k_test_round = round(b1b_16k_test);
+% % % % % %             b1b_16k_test_round(b1b_16k_test_round == 0) = 1;
+% % % % % %             b1b_16k_test_round(b1b_16k_test_round > 257) = 257;
+% % % % % %             if find(b1b_16k_test_round <0)
+% % % % % %                 ind = find(b1b_16k_test_round < 0);
+% % % % % %                 b1b_16k_test_round(ind) = b1b_16k_test_round(ind+1);
+% % % % % %             end
+% % % % % %             
+% % % % % %             b1b_16k_test_floor = floor(b1b_16k_test);
+% % % % % %             b1b_16k_test_floor(b1b_16k_test_floor == 0) = 1;
+% % % % % %             b1b_16k_test_floor(b1b_16k_test_floor > 257) = 257;
+% % % % % %             if find(b1b_16k_test_floor <0)
+% % % % % %                 ind = find(b1b_16k_test_floor < 0);
+% % % % % %                 b1b_16k_test_floor(ind) = b1b_16k_test_floor(ind+1);
+% % % % % %             end
+% % % % % %             
+% % % % % %             b1b_16k_test_ceil = ceil(b1b_16k_test);
+% % % % % %             b1b_16k_test_ceil(b1b_16k_test_ceil == 0) = 1;
+% % % % % %             b1b_16k_test_ceil(b1b_16k_test_ceil > 257) = 257;
+% % % % % %             if find(b1b_16k_test_ceil <0)
+% % % % % %                 ind = find(b1b_16k_test_ceil < 0);
+% % % % % %                 b1b_16k_test_ceil(ind) = b1b_16k_test_ceil(ind+1);
+% % % % % %             end
+% % % % % %             
+% % % % % %             D22X_16k_N_b1b_round_rev(a1a_16k_test_round(:),j) = D22x_16k_N_direct_1(b1b_16k_test_round(:),j);
+% % % % % %             D22X_16k_N_b1b_floor_rev(a1a_16k_test_floor(:),j) = D22x_16k_N_direct_1(b1b_16k_test_floor(:),j);
+% % % % % %             D22X_16k_N_b1b_ceil_rev(a1a_16k_test_ceil(:),j) = D22x_16k_N_direct_1(b1b_16k_test_ceil(:),j);
+% % % % % %        end
+% % % % % %     end
+% % % % % % end
+% % % % % % % Create Sound
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_round_rev, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_round_rev = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % 
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_floor_rev, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_floor_rev = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % 
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_ceil_rev, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_ceil_rev = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % % % % % %% Find inteploation information of male with (a and b)_telda and with (a and b)_telda with NN 
+% % % % % % for i = 1 : 1%n_a
+% % % % % %     D22_inter_b = [];
+% % % % % %     D22_inter_b_telda =[];
+% % % % % %     D22_inter_b_telda_NN = [];
+% % % % % %     for j = 1 : length(a1_total_16k_N)%1% m_a
+% % % % % %         n_a_telda = []; n_b_telda = [];
+% % % % % %         if any(a1_total_16k_N{i,j})
+% % % % % %             for k = 1 : len_a_max
+% % % % % %                 n_a_telda = [n_a_telda ((k-1)*(length(a1_total_16k_N{i,j})-1)/(len_a_max-1))];
+% % % % % %                  n_b_telda = [n_b_telda ((k-1)*(length(b1_total_16k_N{i,j})-1)/(len_b_max-1))];
+% % % % % %             end
+% % % % % %             y_a = [];
+% % % % % %             y_a = [0:1:length(a1_total_16k_N{i,j})-1];
+% % % % % %             A11_telda_1{i,j} = interp1(y_a,a1_total_16k_N{i,j},n_a_telda,'spline');
+% % % % % %             y_b = [];
+% % % % % %             y_b = [0:1:length(b1_total_16k_N{i,j})-1];
+% % % % % %             B11_telda_1{i,j} = interp1(y_b,b1_total_16k_N{i,j},n_b_telda,'spline');
+% % % % % %             y_b_257 = [0:1:257-1];
+% % % % % %             D22_inter_b{i,j}= interp1(y_b_257,D22x_16k_N_direct_1(:,j),b1_total_16k_N{i,j},'spline');
+% % % % % %             D22_inter_b_telda(:,j)= interp1(y_b,D22_inter_b{i,j},B11_telda_1{1,1},'spline');
+% % % % % %             D22_inter_b_telda_NN(:,j)= interp1(y_b,D22_inter_b{i,j},b_final_NN(j,:),'spline');
+% % % % % %         end
+% % % % % %     end
+% % % % % % end
+% % % % % % % Do Warping 
+% % % % % % for iji = 1 : length(D22x_16k_N_direct_1)
+% % % % % %     b_final_NN_round=[];b_final_NN_floor=[];b_final_NN_ceil=[];
+% % % % % %     b_final_NN_round = round(b_final_NN(iji,:));
+% % % % % %     b_final_NN_round(b_final_NN_round == 0) = 1;
+% % % % % %     b_final_NN_round(b_final_NN_round == 257) = 257;
+% % % % % %     if find(b_final_NN_round < 0)
+% % % % % %         ind = 0; ind = find(b_final_NN_round < 0); b_final_NN_round(ind) = b_final_NN_round(ind+1);
+% % % % % %     end
+% % % % % %     
+% % % % % %     b_final_NN_floor = floor(b_final_NN(iji,:));
+% % % % % %     b_final_NN_floor(b_final_NN_floor == 0) =1;
+% % % % % %     b_final_NN_floor(b_final_NN_floor > 257) = 257;
+% % % % % %     if find(b_final_NN_floor < 0)
+% % % % % %         ind = 0; ind = find(b_final_NN_floor < 0); b_final_NN_floor(ind) = b_final_NN_floor(ind+1);
+% % % % % %     end
+% % % % % %     
+% % % % % %     b_final_NN_ceil = ceil(b_final_NN(iji,:));
+% % % % % %     b_final_NN_ceil(b_final_NN_ceil == 0) =1;
+% % % % % %     b_final_NN_ceil(b_final_NN_ceil > 257) = 257;
+% % % % % %     if find(b_final_NN_ceil < 0)
+% % % % % %         ind = 0; ind = find(b_final_NN_ceil < 0); b_final_NN_ceil(ind) = b_final_NN_ceil(ind+1);
+% % % % % %     end
+% % % % % %     
+% % % % % %     a_final_NN_round=[];a_final_NN_floor=[];a_final_NN_ceil=[];
+% % % % % %     a_final_NN_round = round(a_final_NN(iji,:));
+% % % % % %     a_final_NN_round(a_final_NN_round == 0) = 1;
+% % % % % %     a_final_NN_round(a_final_NN_round == 257) = 257;
+% % % % % %     if find(a_final_NN_round < 0)
+% % % % % %         ind = 0; ind = find(a_final_NN_round < 0); a_final_NN_round(ind) = a_final_NN_round(ind+1);
+% % % % % %     end
+% % % % % %     
+% % % % % %     a_final_NN_floor = floor(a_final_NN(iji,:));
+% % % % % %     a_final_NN_floor(a_final_NN_floor == 0) =1;
+% % % % % %     a_final_NN_floor(a_final_NN_floor > 257) = 257;
+% % % % % %     if find(a_final_NN_floor < 0)
+% % % % % %         ind = 0; ind = find(a_final_NN_floor < 0); a_final_NN_floor(ind) = a_final_NN_floor(ind+1);
+% % % % % %     end
+% % % % % %     
+% % % % % %     a_final_NN_ceil = ceil(a_final_NN(iji,:));
+% % % % % %     a_final_NN_ceil(a_final_NN_ceil == 0) =1;
+% % % % % %     a_final_NN_ceil(a_final_NN_ceil > 257) = 257;
+% % % % % %     if find(a_final_NN_ceil < 0)
+% % % % % %         ind = 0; ind = find(a_final_NN_ceil < 0); a_final_NN_ceil(ind) = a_final_NN_ceil(ind+1);
+% % % % % %     end
+% % % % % %     
+% % % % % %     D22X_16k_N_b1b_round_before(a_final_NN_round(:),iji) = D22_inter_b_telda(b_final_NN_round(:),iji);
+% % % % % %     D22X_16k_N_b1b_floor_before(a_final_NN_floor(:),iji) = D22_inter_b_telda(b_final_NN_floor(:),iji);
+% % % % % %     D22X_16k_N_b1b_ceil_before(a_final_NN_ceil(:),iji) = D22_inter_b_telda(b_final_NN_ceil(:),iji);
+% % % % % %     
+% % % % % %     D22X_16k_N_b1b_round_after(a_final_NN_round(:),iji) = D22_inter_b_telda_NN(b_final_NN_round(:),iji);
+% % % % % %     D22X_16k_N_b1b_floor_after(a_final_NN_floor(:),iji) = D22_inter_b_telda_NN(b_final_NN_floor(:),iji);
+% % % % % %     D22X_16k_N_b1b_ceil_after(a_final_NN_ceil(:),iji) = D22_inter_b_telda_NN(b_final_NN_ceil(:),iji);
+% % % % % % end
+% % % % % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % % % % % %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_round_before, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_round_before = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % 
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_floor_before, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_floor_before = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % %  
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_ceil_before, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_ceil_before = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % 
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_round_after, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_round_after = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % 
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_floor_after, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_floor_after = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % 
+% % % % % % synth_win = anal_win;
+% % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];x1_istft1=[]; t_istft1=[];
+% % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_ceil_after, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % y_16k_ceil_after = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % %  synth_win = anal_win;
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_cell_junk11, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % y_16k_22_N_test11 = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % synth_win = anal_win;
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % d222x= d_22_16k;d22xx_original=[];x_istft1=[];
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % d22xx_original = resize(x_istft1', length(d_11_16k),1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % y_16k_22_N = bandpass(d22xx_original,[500 7500],fs1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % synth_win = anal_win;
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % d222x= d_22_16k;d22xx_originaltest=[];x_istft1=[];
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % [x_istft1, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_junk_test, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % d22xx_originaltest = resize(x_istft1', length(d_11_16k),1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % y_16k_22_Ntest_junk = bandpass(d22xx_originaltest,[500 7500],fs1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % d22xx_original1=[];x_istft11=[];
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % [x_istft11, x1_istft11, t_istft11] = istft2(D22X_16k_N_b1b_cell_junk1, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % d22xx_original1 = resize(x_istft11', length(d_11_16k),1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % y_16k_22_N1 = bandpass(d22xx_original1,[500 7500],fs1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % x_istft12=[];d22xx_original2=[];
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % [x_istft12, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_cell_junk, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % d22xx_original2 = resize(x_istft12', length(d_11_16k),1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % y_16k_22_N2 = bandpass(d22xx_original2,[500 7500],fs1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % x_istft11=[];d22xx_original1test=[];
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % [x_istft11, x1_istft11, t_istft11] = istft2(D22X_16k_N_b1b_11_junk1, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % d22xx_original1test = resize(x_istft11', length(d_11_16k),1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % y_16k_22_N1test = bandpass(d22xx_original1test,[500 7500],fs1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % x_istft12=[];d22xx_original2test=[];
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % [x_istft12, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_11_test, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % d22xx_original2test = resize(x_istft12', length(d_11_16k),1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % y_16k_22_N2test = bandpass(d22xx_original2test,[500 7500],fs1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % synth_win = anal_win;
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % d222x= d_22_16k;x_istft1_test=[];d22xx_original_test=[];
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % [x_istft1_test, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_junk1, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % d22xx_original_test = resize(x_istft1_test', length(d_11_16k),1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % y_16k_22_N_test = bandpass(d22xx_original_test,[500 7500],fs1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % 
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % x_istft1_test1=[];d22xx_original_test1=[];
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % [x_istft1_test1, x1_istft1, t_istft1] = istft2(D22X_16k_N_b1b_junk1_test, anal_win, synth_win, hop, nfft, fs1,D11_16k_N,d_22_16k,d_11_16k,d222x);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % d22xx_original_test1 = resize(x_istft1_test1', length(d_11_16k),1);
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % % y_16k_22_N_test1 = bandpass(d22xx_original_test1,[500 7500],fs1)
+
+end
+% toc
+%%
+Send_Email(i,machine_type)
+
+
+file_name1 = strcat(mydir,'/result/D2x_TimeAlign_cell_1_',num2str(i),'_16k.mat');
+        save(file_name1,'D2x_TimeAlign_cell_16k');
+        
+        file_name1 = strcat(mydir,'/result/D2x_TimeAlign_cell_abs_1_',num2str(i),'_16k.mat');
+        save(file_name1,'D2x_TimeAlign_cell_abs_16k');
+        
+        
+        file_name1 = strcat(mydir,'/result/a1_total_1_',num2str(i),'_16k_N.mat');
+        save(file_name1,'a1_total_16k_N');
+        file_name1 = strcat(mydir,'/result/a1_total_1_',num2str(i),'_16k_N_waled.mat');
+        save(file_name1,'a1_total_16k_N_waled');
+        
+        file_name1 = strcat(mydir,'/result/b1_total_1_',num2str(i),'_16k_N.mat');
+        save(file_name1,'b1_total_16k_N');
+        file_name1 = strcat(mydir,'/result/b1_total_1_',num2str(i),'_16k_N_waled.mat');
+        save(file_name1,'b1_total_16k_N_waled');
+% save('maleInfo_Alig_1_16k.mat','D22x_16k_N_direct_1');
+% save('a_total_1_16k.mat','a1_total_16k_N');
+% save('b_total_1_16k.mat','b1_total_16k_N');
+% 
+% 
+% save('maleInfo_Alig_abs_401_550_16k.mat','D2x_TimeAlign_cell_abs_16k');
+% save('a_total_401_550_16k.mat','a1_total_16k_N');
+% save('b_total_401_550_16k.mat','b1_total_16k_N');
+% 
+% mail = 'alwaleed.hadi@gmail.com';
+% password = 'HassanHisham79';
+% setpref('Internet','E_mail',mail);
+% setpref('Internet','SMTP_Server','smtp.gmail.com');
+% setpref('Internet','SMTP_Username',mail);
+% setpref('Internet','SMTP_Password',password);
+% props = java.lang.System.getProperties;
+% props.setProperty('mail.smtp.auth','true');
+% props.setProperty('mail.smtp.socketFactory.class', 'javax.net.ssl.SSLSocketFactory');
+% props.setProperty('mail.smtp.socketFactory.port','465');
+% sendmail('engalwaleed@yahoo.com','Matlab 401_550, B.M.','Everything is good, 401_550, B.M.');
